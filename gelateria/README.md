@@ -1,9 +1,10 @@
 # Gelateria Vanillatte Bot
 
-Bot Discord per gestire la gelateria Vanillatte: ordini, cucina, vetrina, magazzino pezzi e scontrini.
+Bot Discord per gestire la gelateria Vanillatte: ordini, cucina, vetrina, magazzino pezzi e scontrini. Usa la libreria `inventory-core.cjs` per la gestione dell'inventario.
 
 ## Setup tecnico
 - Dipendenze: `discord.js`, `better-sqlite3`, `dotenv`
+- Libreria interna: `../inventory-core.cjs`
 - Avvio: `node gelateria.cjs`
 - Variabili d'ambiente: `DISCORD_TOKEN` (obbligatoria), `DB_PATH`, `APP_NAME`, `ORG_ID`
 
