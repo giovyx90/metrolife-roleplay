@@ -30,7 +30,7 @@ Nota: setup/autogive rimangono agli Admin RP. La direzione e lo staff gestiscono
 	1.	Crea bozza: /scontrino crea metodo:<carta|contanti> [cliente|nome_cliente]
 	2.	Aggiungi righe: /scontrino aggiungi menu:<menu_code> quantita:<n> [prezzo_cents]
 	3.	Controlla: /scontrino mostra
-	4.	Emetti: /scontrino emetti → allega file HTML brand Vanillatte (rosa/bianco/crema)
+	4.	Emetti: /scontrino emetti → allega file pdf dall'HTML brand Vanillatte (rosa/bianco/crema)
 	5.	Annulla (se serve): /scontrino annulla
 
 Prezzi: se il menu_code esiste in listino, si usa price_cents; altrimenti specifica prezzo_cents.
