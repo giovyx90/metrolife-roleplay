@@ -477,9 +477,6 @@ client.on('interactionCreate', async (i) => {
         .setDescription(`Consegnata a <@${target.id}> come item **cdi** (stato: VALID).`);
       return i.reply({ embeds:[emb], ephemeral:true });
     }
-      await addAudit(guildId, i.user.id, 'CERT_TRADE', to.id, { from: from.id, to: to.id, id_cert: payload.id_cert });
-      return i.reply({ embeds:[embOk('Trade simulato').setDescription(`Certificato trasferito da <@${from.id}> a <@${to.id}>.`)], ephemeral:true });
-    }
 
   } catch (err) {
     console.error('Interaction error:', err);
