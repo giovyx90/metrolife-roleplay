@@ -23,7 +23,6 @@ const EXPIRY_MS_DEFAULT = 14*24*60*60*1000; // 14 giorni
 const EXPIRY_SOON_MS    = 48*60*60*1000;    // 48h
 const SLOT_COUNT = 50;
 const STACK_SIZE = 16;
-const PLAYER_SLOTS = 10;
 
 const DEFAULT_COOK_MAX = 2;
 const DEFAULT_STATION_MAX = 4;
@@ -52,6 +51,8 @@ function requireTables(names){
   for (const t of names){ if (!tableExists(t)) throw new Error(`Tabella mancante: ${t}. Esegui il seed o correggi i nomi.`); }
 }
 requireTables([GEL.items,GEL.lots,GEL.moves,GEL.show,GEL.menu,GEL.mcomps,GEL.cmap,GEL.ktix,GEL.kcons,'warehouse_slots','warehouse_items','inventory_slots','kitchen_config','economy_config','intake_log']);
+
+const { listPlayerSlots, InventoryAddStack, InventoryRemoveStack, updatePlayerSlot } = require('../inventory-core.cjs')(db);
 
 // --- Tabelle SCONTRINO (nuove, se mancanti) ---
 db.exec(`
@@ -143,15 +144,6 @@ const qWarehousePZ_ANY = db.prepare(`
   WHERE wi.org_id=? AND wi.sku=? AND wi.qty>0
   ORDER BY (ws.area='CUCINA') DESC, (ws.area='VETRINA') DESC, wi.slot_idx ASC
 `);
-
-const qISGet  = db.prepare(`SELECT * FROM inventory_slots WHERE guild_id=? AND user_id=? AND slot=?`);
-const qISUp   = db.prepare(`
-  INSERT INTO inventory_slots(guild_id, user_id, slot, item_id, quantity)
-  VALUES (?,?,?,?,?)
-  ON CONFLICT(guild_id, user_id, slot) DO UPDATE SET item_id=excluded.item_id, quantity=excluded.quantity
-`);
-const qISDel  = db.prepare(`DELETE FROM inventory_slots WHERE guild_id=? AND user_id=? AND slot=?`);
-const qInvList= db.prepare(`SELECT slot, item_id, quantity FROM inventory_slots WHERE guild_id=? AND user_id=? ORDER BY slot ASC`);
 const qItemStackMax = db.prepare(`SELECT stack_max FROM items WHERE id=?`);
 const qItemRow = db.prepare(`SELECT * FROM items WHERE id=?`);
 const qItemIns = db.prepare(`INSERT INTO items(id,name,emoji,description,stack_max) VALUES (?,?,?,?,?)`);
@@ -246,61 +238,34 @@ function estimateEta(menu, qty, notes, loadBanco){
   return eta;
 }
 
-// ===== Inventario player (stack 16, multi-slot) =====
+// ===== Inventario player (usa inventory-core) =====
 function getPlayerTotal(guildId, userId, itemId){
-  return (qInvList.all(guildId, userId).filter(r=>r.item_id===itemId).reduce((a,b)=>a+(b.quantity||0),0)) || 0;
-}
-function canFitInInventory(guildId, userId, itemId, qty){
-  const caps = stackCap(itemId);
-  const rows = qInvList.all(guildId, userId);
-  let free = 0;
-  for (const r of rows){
-    if (!r.item_id) { free += caps; continue; }
-    if (r.item_id===itemId) free += Math.max(0, caps - (r.quantity||0));
-  }
-  return free >= qty;
+  return listPlayerSlots(guildId, userId).filter(r=>r.item_id===itemId).reduce((a,b)=>a+(b.quantity||0),0);
 }
 function giveToPlayer(guildId, userId, itemId, qty, preferredSlot=null){
-  const caps = stackCap(itemId);
-  const rows = qInvList.all(guildId, userId);
-  let rem = qty;
-
-  const order = [...rows];
   if (preferredSlot){
-    order.sort((a,b)=> (a.slot===preferredSlot?-1:0) - (b.slot===preferredSlot?-1:0));
-  }
-  for (const r of order){
-    if (rem<=0) break;
-    if (r.item_id===itemId && (r.quantity||0) < caps){
-      const add = Math.min(rem, caps - (r.quantity||0));
-      qISUp.run(guildId, userId, r.slot, itemId, (r.quantity||0) + add);
-      rem -= add;
+    let rem = qty;
+    const slots = listPlayerSlots(guildId, userId);
+    const cap = stackCap(itemId);
+    const pref = slots.find(s=>s.slot===preferredSlot);
+    if (pref){
+      if (!pref.item_id){
+        const put = Math.min(cap, rem);
+        updatePlayerSlot(guildId, userId, preferredSlot, { item_id, quantity: put });
+        rem -= put;
+      } else if (pref.item_id===itemId && pref.quantity < cap){
+        const can = Math.min(cap - pref.quantity, rem);
+        updatePlayerSlot(guildId, userId, preferredSlot, { item_id, quantity: pref.quantity + can });
+        rem -= can;
+      }
     }
+    if (rem>0) InventoryAddStack({ guild_id:guildId, user_id:userId, item_id, amount: rem });
+  } else {
+    InventoryAddStack({ guild_id:guildId, user_id:userId, item_id, amount: qty });
   }
-  for (let s=1; s<=PLAYER_SLOTS && rem>0; s++){
-    const row = qISGet.get(guildId, userId, s);
-    if (!row || !row.item_id){
-      const add = Math.min(rem, caps);
-      qISUp.run(guildId, userId, s, itemId, add);
-      rem -= add;
-    }
-  }
-  if (rem>0) throw new Error(`Inventario pieno: servono ${rem} pezzi di spazio`);
 }
 function takeFromPlayer(guildId, userId, itemId, qty){
-  let rem = qty;
-  const tx = db.transaction(()=>{
-    for (let s=1; s<=PLAYER_SLOTS && rem>0; s++){
-      const r = qISGet.get(guildId, userId, s);
-      if (!r || r.item_id!==itemId || (r.quantity||0)<=0) continue;
-      const take = Math.min(rem, r.quantity||0);
-      const left = (r.quantity||0) - take;
-      if (left<=0) qISDel.run(guildId, userId, s);
-      else qISUp.run(guildId, userId, s, itemId, left);
-      rem -= take;
-    }
-    if (rem>0) throw new Error(`Il player non ha abbastanza ${itemId} (mancano ${rem})`);
-  }); tx();
+  InventoryRemoveStack({ guild_id:guildId, user_id:userId, item_id, amount: qty });
 }
 function ensureMenuAsItem(menuCode){
   const id = menuCode; // stesso nome del menu (es. "coppetta_2g")
@@ -627,16 +592,20 @@ client.on('interactionCreate', async (i)=>{
       const map = qMapGet.get(w.sku);
       if (!map) return i.reply({ content:`Manca mapping SKU→item_id per ${w.sku} (usa /mappa-item)`, ephemeral:true });
       const give = Math.min(qty, w.qty);
-      if (!canFitInInventory(i.guildId, user.id, map.item_id, give)){
-        return i.reply({ content:`Inventario di <@${user.id}> pieno per ${give} \`${map.item_id}\` (stack 16/slot).`, ephemeral:true });
+      try {
+        const tx = db.transaction(()=>{
+          const left = w.qty - give;
+          if (left<=0) qWItemDel.run(ORG_ID, wh_slot);
+          else qWItemUp.run(ORG_ID, wh_slot, w.sku, w.lot_id||null, left, 'pz', now());
+          giveToPlayer(i.guildId, user.id, map.item_id, give, preferred);
+          qGelMovesIns.run(now(), i.user.id, 'TRANSFER', w.sku, '-', 'WAREHOUSE', 'PLAYER', -give, `to ${user.id}`);
+        }); tx();
+      } catch(e){
+        if (e.message.includes('Inventario pieno')){
+          return i.reply({ content:`Inventario di <@${user.id}> pieno per ${give} \`${map.item_id}\`.`, ephemeral:true });
+        }
+        throw e;
       }
-      const tx = db.transaction(()=>{
-        const left = w.qty - give;
-        if (left<=0) qWItemDel.run(ORG_ID, wh_slot);
-        else qWItemUp.run(ORG_ID, wh_slot, w.sku, w.lot_id||null, left, 'pz', now());
-        giveToPlayer(i.guildId, user.id, map.item_id, give, preferred);
-        qGelMovesIns.run(now(), i.user.id, 'TRANSFER', w.sku, '-', 'WAREHOUSE', 'PLAYER', -give, `to ${user.id}`);
-      }); tx();
       return i.reply({ embeds:[emb('Trasferimento', `${w.sku} ×${give} → <@${user.id}> (multi-slot)`)], ephemeral:true });
     }
     if (name==='player-a-magazzino'){
@@ -645,7 +614,7 @@ client.on('interactionCreate', async (i)=>{
       const qty = i.options.getInteger('quantita', true);
       const wh_slot = i.options.getInteger('wh_slot', true);
       const g = i.guildId;
-      const p = qISGet.get(g, user.id, pslot);
+      const p = listPlayerSlots(g, user.id).find(s=>s.slot===pslot);
       if (!p || !p.item_id || p.quantity<=0) return i.reply({ content:'Slot player vuoto', ephemeral:true });
       const skuRow = db.prepare(`SELECT sku FROM gel_item_map WHERE item_id=?`).get(p.item_id);
       if (!skuRow) return i.reply({ content:`Nessun SKU mappato per ${p.item_id}. Usa /mappa-item`, ephemeral:true });
@@ -827,16 +796,14 @@ client.on('interactionCreate', async (i)=>{
       qKTixReady.run('READY', now(), ticketId);
 
       // CONSEGNA al gelataio: item = menu_code (es. "coppetta_2g")
+      const outItem = ensureMenuAsItem(t.menu_code);
+      const receiver = t.assigned_to || i.user.id;
       try {
-        const outItem = ensureMenuAsItem(t.menu_code);
-        const receiver = t.assigned_to || i.user.id;
-        if (!canFitInInventory(i.guildId, receiver, outItem, t.qty)){
-          await i.followUp?.({ content:`⚠️ <@${receiver}> non ha spazio per \`${outItem}\` ×${t.qty}.`, ephemeral:true }).catch(()=>{});
-        } else {
-          giveToPlayer(i.guildId, receiver, outItem, t.qty);
-          await i.followUp?.({ content:`✅ Consegnato a <@${receiver}>: \`${outItem}\` ×${t.qty}.`, ephemeral:true }).catch(()=>{});
-        }
-      } catch(e){ console.warn('Consegna fallita:', e.message); }
+        InventoryAddStack({ guild_id:i.guildId, user_id:receiver, item_id:outItem, amount:t.qty });
+        await i.followUp?.({ content:`✅ Consegnato a <@${receiver}>: \`${outItem}\` ×${t.qty}.`, ephemeral:true }).catch(()=>{});
+      } catch(e){
+        await i.followUp?.({ content:`⚠️ <@${receiver}> non ha spazio per \`${outItem}\` ×${t.qty}.`, ephemeral:true }).catch(()=>{});
+      }
 
       return i.reply({ embeds:[emb('Cucina', `Ticket **#${ticketId}** pronto al banco`)], ephemeral:true });
     }
@@ -850,9 +817,7 @@ client.on('interactionCreate', async (i)=>{
       try {
         const outItem = ensureMenuAsItem(t.menu_code);
         const receiver = t.assigned_to || i.user.id;
-        if (canFitInInventory(i.guildId, receiver, outItem, t.qty)) {
-          giveToPlayer(i.guildId, receiver, outItem, t.qty);
-        }
+        InventoryAddStack({ guild_id:i.guildId, user_id:receiver, item_id:outItem, amount:t.qty });
       } catch {}
       return i.reply({ embeds:[emb('Cucina', `Ticket **#${ticketId}** segnato pronto`)], ephemeral:true });
     }
