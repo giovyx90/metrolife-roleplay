@@ -1,0 +1,427 @@
+-- MetroLife City Database Schema
+PRAGMA foreign_keys = ON;
+
+-- Items catalog
+CREATE TABLE IF NOT EXISTS items (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  emoji TEXT,
+  description TEXT,
+  stack_max INTEGER NOT NULL DEFAULT 16
+);
+
+-- Player inventory slots
+CREATE TABLE IF NOT EXISTS inventory_slots (
+  guild_id TEXT NOT NULL,
+  user_id  TEXT NOT NULL,
+  slot     INTEGER NOT NULL,
+  item_id  TEXT,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  instance_id TEXT,
+  durability INTEGER,
+  durability_max INTEGER,
+  PRIMARY KEY (guild_id, user_id, slot),
+  FOREIGN KEY (item_id) REFERENCES items(id) ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+-- Organization inventory slots
+CREATE TABLE IF NOT EXISTS org_inventory_slots (
+  guild_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  slot INTEGER NOT NULL,
+  item_id TEXT,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (guild_id, org_id, slot),
+  FOREIGN KEY (item_id) REFERENCES items(id) ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+-- MetroDesk tables
+CREATE TABLE IF NOT EXISTS tenants (
+  guild_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  category_id TEXT NOT NULL,
+  archive_id TEXT NOT NULL,
+  staff_roles_json   TEXT NOT NULL DEFAULT '[]',
+  manager_roles_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (guild_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS counters (
+  guild_id TEXT NOT NULL,
+  tenant   TEXT NOT NULL,
+  day      TEXT NOT NULL,
+  value    INTEGER NOT NULL,
+  PRIMARY KEY (guild_id, tenant, day)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  tenant   TEXT NOT NULL,
+  number   INTEGER NOT NULL,
+  channel_id  TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  operator_id TEXT NOT NULL,
+  opened_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT,
+  closed_at  TEXT,
+  closed_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_open
+  ON sessions (guild_id, tenant, number) WHERE closed_at IS NULL;
+
+-- Municipio tables
+CREATE TABLE IF NOT EXISTS muni_arrivals (
+  id_cert TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  cf TEXT NOT NULL,
+  name TEXT NOT NULL,
+  surname TEXT NOT NULL,
+  birth_date TEXT NOT NULL,
+  birth_place TEXT NOT NULL,
+  gender TEXT NOT NULL,
+  issued_at TEXT NOT NULL,
+  signature_hash TEXT NOT NULL,
+  tutorial_version TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS muni_registry (
+  guild_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  cf TEXT NOT NULL,
+  name TEXT NOT NULL,
+  surname TEXT NOT NULL,
+  birth_date TEXT NOT NULL,
+  birth_place TEXT NOT NULL,
+  gender TEXT NOT NULL,
+  registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+  registered_by TEXT NOT NULL,
+  grant_bonus_done INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS cdi_docs (
+  id_doc TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  cf TEXT NOT NULL,
+  name TEXT NOT NULL,
+  surname TEXT NOT NULL,
+  birth_date TEXT NOT NULL,
+  birth_place TEXT NOT NULL,
+  gender TEXT NOT NULL,
+  emitted_at TEXT NOT NULL,
+  last_review_at TEXT,
+  status TEXT NOT NULL DEFAULT 'VALID',
+  issuer TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS muni_audit (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_id TEXT,
+  info TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS municipio_tutorial (
+  user_id TEXT PRIMARY KEY,
+  step INTEGER NOT NULL DEFAULT 1,
+  completed INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT
+);
+
+-- MetroTrade tables
+CREATE TABLE IF NOT EXISTS trade_sessions (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  a_id TEXT NOT NULL,
+  b_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'CREATED',
+  a_ready INTEGER NOT NULL DEFAULT 0,
+  b_ready INTEGER NOT NULL DEFAULT 0,
+  a_confirm INTEGER NOT NULL DEFAULT 0,
+  b_confirm INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS trade_offers (
+  session_id TEXT NOT NULL,
+  from_user_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  PRIMARY KEY (session_id, from_user_id, item_id),
+  FOREIGN KEY (session_id) REFERENCES trade_sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS trade_escrow (
+  session_id TEXT NOT NULL,
+  from_user_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  instance_id TEXT,
+  durability INTEGER,
+  durability_max INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_trade_escrow_sess ON trade_escrow(session_id);
+
+-- MetroAziende tables
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  shortcode TEXT NOT NULL,
+  primary_color TEXT NOT NULL DEFAULT '#5865F2',
+  icon_emoji TEXT,
+  category_id TEXT NOT NULL,
+  archive_id  TEXT NOT NULL,
+  ticket_prefix TEXT NOT NULL,
+  brand_bio TEXT NOT NULL DEFAULT '',
+  brand_hours TEXT NOT NULL DEFAULT '',
+  brand_welcome TEXT NOT NULL DEFAULT '',
+  brand_services TEXT NOT NULL DEFAULT '',
+  logo_url TEXT,
+  banner_url TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(guild_id, name),
+  UNIQUE(guild_id, shortcode)
+);
+
+CREATE TABLE IF NOT EXISTS org_roles (
+  org_id TEXT NOT NULL,
+  level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),
+  name TEXT NOT NULL,
+  discord_role_id TEXT,
+  color TEXT NOT NULL DEFAULT '#99AAB5',
+  permissions_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (org_id, level),
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS org_members (
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),
+  joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (org_id, user_id),
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS org_contract_templates (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  published INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS org_contract_offers (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  template_id TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  level INTEGER NOT NULL,
+  salary TEXT,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  decided_at TEXT,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (template_id) REFERENCES org_contract_templates(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS org_contract_history (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  level INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  body_snapshot TEXT NOT NULL,
+  salary TEXT,
+  notes TEXT,
+  signed_by_user TEXT NOT NULL,
+  signed_by_dir TEXT,
+  pdf_blob BLOB,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS org_audit (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_id TEXT,
+  info TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Gelateria receipts
+CREATE TABLE IF NOT EXISTS receipts(
+  id INTEGER PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  operator_id TEXT NOT NULL,
+  customer_id TEXT,
+  customer_name TEXT,
+  payment_method TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  total_cents INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  html_blob BLOB
+);
+
+CREATE TABLE IF NOT EXISTS receipt_items(
+  id INTEGER PRIMARY KEY,
+  receipt_id INTEGER NOT NULL,
+  menu_code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  qty INTEGER NOT NULL,
+  unit_price_cents INTEGER NOT NULL,
+  FOREIGN KEY(receipt_id) REFERENCES receipts(id) ON DELETE CASCADE
+);
+
+-- Gelateria core tables
+CREATE TABLE IF NOT EXISTS gel_items (
+  sku TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS gel_lots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sku TEXT NOT NULL,
+  lot_code TEXT,
+  area TEXT NOT NULL,
+  qty INTEGER NOT NULL,
+  unit TEXT NOT NULL,
+  expires_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gel_stock_moves (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  sku TEXT NOT NULL,
+  lot_code TEXT,
+  from_area TEXT,
+  to_area TEXT,
+  delta INTEGER NOT NULL,
+  note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS gel_showcase_slots (
+  slot INTEGER PRIMARY KEY,
+  lot_id INTEGER,
+  level_pct INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gel_menu_items (
+  code TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  price_cents INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gel_menu_components (
+  menu_code TEXT NOT NULL,
+  component TEXT NOT NULL,
+  qty_unit REAL NOT NULL,
+  PRIMARY KEY (menu_code, component)
+);
+
+CREATE TABLE IF NOT EXISTS gel_components_map (
+  component TEXT PRIMARY KEY,
+  sku TEXT NOT NULL,
+  unit_to_pz REAL,
+  unit_to_ml REAL
+);
+
+CREATE TABLE IF NOT EXISTS gel_kitchen_tickets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  menu_code TEXT NOT NULL,
+  qty INTEGER NOT NULL,
+  notes TEXT,
+  status TEXT NOT NULL,
+  station TEXT,
+  eta_sec INTEGER,
+  started_at INTEGER,
+  finished_at INTEGER,
+  assigned_to TEXT,
+  chosen_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS gel_ticket_consumptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id INTEGER NOT NULL,
+  lot_id INTEGER,
+  sku TEXT NOT NULL,
+  qty INTEGER NOT NULL,
+  unit TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gel_item_map (
+  sku TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL UNIQUE
+);
+
+-- Warehouse tables
+CREATE TABLE IF NOT EXISTS warehouse_slots (
+  org_id TEXT NOT NULL,
+  slot_idx INTEGER NOT NULL,
+  area TEXT NOT NULL,
+  capacity INTEGER NOT NULL,
+  PRIMARY KEY (org_id, slot_idx)
+);
+
+CREATE TABLE IF NOT EXISTS warehouse_items (
+  org_id TEXT NOT NULL,
+  slot_idx INTEGER NOT NULL,
+  sku TEXT NOT NULL,
+  lot_id INTEGER,
+  qty INTEGER NOT NULL,
+  unit TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (org_id, slot_idx),
+  FOREIGN KEY (org_id, slot_idx) REFERENCES warehouse_slots(org_id, slot_idx) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS kitchen_config (
+  org_id TEXT PRIMARY KEY,
+  cook_max_active INTEGER,
+  station_max_active INTEGER,
+  scoop_ml INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS economy_config (
+  org_id TEXT PRIMARY KEY,
+  economy_enabled INTEGER,
+  default_lot_ml INTEGER,
+  daily_cap_ml INTEGER,
+  max_lot_ml INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS intake_log (
+  date_str TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  ml_total INTEGER NOT NULL,
+  PRIMARY KEY (date_str, org_id)
+);
+
