@@ -127,113 +127,8 @@ async function addAudit(guildId, actorId, action, targetId, infoObj) {
     .run(uuid(), guildId, actorId, action, targetId || null, JSON.stringify(infoObj||{}));
 }
 
-// ====== Adapter verso MetroInventory (stesso DB / tabelle di MetroInventories) ======
-const INV_SLOTS_TOTAL = 10;
-function invGetItem(itemId) {
-  return db.prepare(`SELECT * FROM items WHERE id=?`).get(itemId);
-}
-function invEnsureSlots(guildId, userId) {
-  const existing = new Set(
-    db.prepare(`SELECT slot FROM inventory_slots WHERE guild_id=? AND user_id=?`)
-      .all(guildId, userId).map(r=>r.slot)
-  );
-  const qInsert = db.prepare(`
-    INSERT INTO inventory_slots (guild_id, user_id, slot, item_id, quantity, instance_id, durability, durability_max)
-    VALUES (?, ?, ?, NULL, 0, NULL, NULL, NULL)
-  `);
-  for (let s=1; s<=INV_SLOTS_TOTAL; s++) if (!existing.has(s)) qInsert.run(guildId, userId, s);
-}
-function invListSlots(guildId, userId) {
-  return db.prepare(`SELECT * FROM inventory_slots WHERE guild_id=? AND user_id=? ORDER BY slot`)
-           .all(guildId, userId);
-}
-function invUpdateSlot(guildId, userId, slot, { item_id, quantity, instance_id, durability=null, durability_max=null }) {
-  db.prepare(`
-    UPDATE inventory_slots
-    SET item_id=?, quantity=?, instance_id=?, durability=?, durability_max=?
-    WHERE guild_id=? AND user_id=? AND slot=?
-  `).run(item_id, quantity, instance_id, durability, durability_max, guildId, userId, slot);
-}
-function invClearSlot(guildId, userId, slot) {
-  db.prepare(`
-    UPDATE inventory_slots
-    SET item_id=NULL, quantity=0, instance_id=NULL, durability=NULL, durability_max=NULL
-    WHERE guild_id=? AND user_id=? AND slot=?
-  `).run(guildId, userId, slot);
-}
-
-// Add stackabili (es. 100euro)
-function InventoryAddStack({ guild_id, user_id, item_id, amount }) {
-  const item = invGetItem(item_id);
-  if (!item) throw new Error(`Item "${item_id}" inesistente nel catalogo MetroInventory`);
-  const maxS = item.stack_max || 16;
-  if (maxS === 1) throw new Error('Usa InventoryAddUnique per item unici');
-
-  invEnsureSlots(guild_id, user_id);
-  const slots = invListSlots(guild_id, user_id);
-  let remaining = amount;
-
-  // riempi stack parziali
-  for (const s of slots) {
-    if (remaining<=0) break;
-    if (s.item_id === item_id && s.quantity < maxS) {
-      const can = Math.min(maxS - s.quantity, remaining);
-      invUpdateSlot(guild_id, user_id, s.slot, { item_id, quantity: s.quantity + can, instance_id: null });
-      remaining -= can;
-    }
-  }
-  // usa slot liberi
-  for (const s of slots) {
-    if (remaining<=0) break;
-    if (!s.item_id) {
-      const put = Math.min(maxS, remaining);
-      invUpdateSlot(guild_id, user_id, s.slot, { item_id, quantity: put, instance_id: null });
-      remaining -= put;
-    }
-  }
-  if (remaining > 0) throw new Error('Inventario pieno (slot insufficienti)');
-}
-
-// Add UNICO (es. certificato_arrivo, cdi) + metadata in inventory_instances_meta
-function InventoryAddUnique({ guild_id, user_id, item_id, payload_json }) {
-  const item = invGetItem(item_id);
-  if (!item) throw new Error(`Item "${item_id}" inesistente nel catalogo MetroInventory`);
-  const maxS = item.stack_max || 16;
-  if (maxS !== 1) throw new Error('Item non marcato come unico (stack_max=1)');
-
-  invEnsureSlots(guild_id, user_id);
-  const slots = invListSlots(guild_id, user_id);
-  const free = slots.find(s => !s.item_id);
-  if (!free) throw new Error('Inventario pieno (nessuno slot libero)');
-
-  const iid = uuid();
-  invUpdateSlot(guild_id, user_id, free.slot, { item_id, quantity: 1, instance_id: iid });
-  db.prepare(`INSERT INTO inventory_instances_meta (instance_id, item_id, payload_json)
-              VALUES (?, ?, ?)`).run(iid, item_id, JSON.stringify(payload_json || {}));
-  return iid;
-}
-
-// Cerca UNICO per item_id → { instance_id, meta }
-function InventoryFindUnique(guild_id, user_id, item_id) {
-  const row = db.prepare(`
-    SELECT s.instance_id
-    FROM inventory_slots s
-    WHERE s.guild_id=? AND s.user_id=? AND s.item_id=? AND s.quantity=1 AND s.instance_id IS NOT NULL
-    ORDER BY s.slot LIMIT 1
-  `).get(guild_id, user_id, item_id);
-  if (!row) return null;
-  const meta = db.prepare(`SELECT payload_json FROM inventory_instances_meta WHERE instance_id=?`).get(row.instance_id);
-  return { instance_id: row.instance_id, meta: meta ? JSON.parse(meta.payload_json) : {} };
-}
-
-// Rimuovi UNICO per instance_id
-function InventoryRemoveUniqueById(guild_id, user_id, instance_id) {
-  const slot = db.prepare(`
-    SELECT slot FROM inventory_slots WHERE guild_id=? AND user_id=? AND instance_id=? LIMIT 1
-  `).get(guild_id, user_id, instance_id);
-  if (slot) invClearSlot(guild_id, user_id, slot.slot);
-  db.prepare(`DELETE FROM inventory_instances_meta WHERE instance_id=?`).run(instance_id);
-}
+// ====== Adapter verso MetroInventory (libreria condivisa) ======
+const inv = require("../inventory-core.cjs")(db);
 
 // ====== Discord client ======
 const client = new Client({
@@ -297,12 +192,6 @@ const COMMANDS = [
     .addStringOption(o=>o.setName('org').setDescription('Nome o shortcode organizzazione (Municipio)').setRequired(true))
     .addUserOption(o=>o.setName('cittadino').setDescription('Utente registrato').setRequired(true)),
 
-  // 5) (DEV/TEST) Simulatore di trade certificato → segretario
-  new SlashCommandBuilder()
-    .setName('trade-sim')
-    .setDescription('DEV: Simula un trade di certificato_arrivo verso un dipendente')
-    .addUserOption(o=>o.setName('from').setDescription('Mittente (cittadino)').setRequired(true))
-    .addUserOption(o=>o.setName('to').setDescription('Destinatario (dipendente)').setRequired(true))
 ].map(c=>c.toJSON());
 
 // ====== Ready ======
@@ -350,7 +239,7 @@ client.on('interactionCreate', async (i) => {
       // Items via MetroInventory
       try {
         // certificato_arrivo (UNICO)
-        InventoryAddUnique({
+        inv.InventoryAddUnique({
           guild_id: guildId, user_id: i.user.id, item_id: 'certificato_arrivo',
           payload_json: {
             type:'arrival_certificate',
@@ -359,7 +248,7 @@ client.on('interactionCreate', async (i) => {
           }
         });
         // 100euro (stack)
-        InventoryAddStack({ guild_id: guildId, user_id: i.user.id, item_id: '100euro', amount: 1 });
+        inv.InventoryAddStack({ guild_id: guildId, user_id: i.user.id, item_id: '100euro', amount: 1 });
       } catch (e) {
         await addAudit(guildId, i.user.id, 'TUTORIAL_DONE', i.user.id, { id_cert, cf, items_error: e.message });
         return i.reply({ content:'⚠️ Errore consegna oggetti. Riprova il comando.', ephemeral:true });
@@ -405,8 +294,7 @@ client.on('interactionCreate', async (i) => {
         const issued_at = new Date().toISOString();
         const id_cert = uuid();
         const sig = crypto.createHash('sha256').update(`${i.user.id}|${issued_at}|${nome}|${cognome}`).digest('sha256').digest('hex');
-
-        InventoryAddUnique({
+        inv.InventoryAddUnique({
           guild_id:guildId, user_id:i.user.id, item_id:'certificato_arrivo',
           payload_json:{
             type:'arrival_certificate',
@@ -414,7 +302,7 @@ client.on('interactionCreate', async (i) => {
             issued_at, signature_hash:sig, tutorial_version:'self-1.0'
           }
         });
-        InventoryAddStack({ guild_id:guildId, user_id:i.user.id, item_id:'100euro', amount:1 });
+        inv.InventoryAddStack({ guild_id:guildId, user_id:i.user.id, item_id:'100euro', amount:1 });
 
         db.prepare(`UPDATE muni_registry SET grant_bonus_done=1 WHERE guild_id=? AND user_id=?`).run(guildId, i.user.id);
       } catch (e) {
@@ -443,7 +331,7 @@ client.on('interactionCreate', async (i) => {
       if (!isMunicipioEmployee(org.id, i.user.id))
         return i.reply({ content:'❌ Devi essere un dipendente del Municipio (L1–L5).', ephemeral:true });
 
-      const cert = InventoryFindUnique(guildId, i.user.id, 'certificato_arrivo');
+      const cert = inv.InventoryFindUnique(guildId, i.user.id, 'certificato_arrivo');
       if (!cert) {
         return i.reply({
           embeds:[embWarn('Nessun certificato in tuo possesso').setDescription('Ricevi il **certificato_arrivo** via /trade prima di registrare.')],
@@ -480,7 +368,7 @@ client.on('interactionCreate', async (i) => {
 
       const target = i.options.getUser('cittadino', true);
 
-      const cert = InventoryFindUnique(guildId, i.user.id, 'certificato_arrivo');
+      const cert = inv.InventoryFindUnique(guildId, i.user.id, 'certificato_arrivo');
       if (!cert) return i.reply({ content:'❌ Non hai un certificato_arrivo nel tuo inventario.', ephemeral:true });
 
       const meta = cert.meta || {};
@@ -514,8 +402,8 @@ client.on('interactionCreate', async (i) => {
         }
       } catch {}
 
-      // Consuma certificato dal registrante
-      InventoryRemoveUniqueById(guildId, i.user.id, cert.instance_id);
+            // Consuma certificato dal registrante
+      inv.InventoryRemoveUniqueById(guildId, i.user.id, cert.instance_id);
 
       // Aggiorna nickname
       try { const mem = await i.guild.members.fetch(target.id); await mem.setNickname(`${nameRP} ${surnameRP}`, 'Registrazione anagrafe'); } catch {}
@@ -550,7 +438,7 @@ client.on('interactionCreate', async (i) => {
 
       // Item CDI (UNICO) → nel cittadino
       try {
-        InventoryAddUnique({
+        inv.InventoryAddUnique({
           guild_id: guildId,
           user_id: target.id,
           item_id: 'cdi',
@@ -589,26 +477,6 @@ client.on('interactionCreate', async (i) => {
         .setDescription(`Consegnata a <@${target.id}> come item **cdi** (stato: VALID).`);
       return i.reply({ embeds:[emb], ephemeral:true });
     }
-
-    // 5) /trade-sim — dev
-    if (name === 'trade-sim') {
-      if (!isServerAdmin(i)) return i.reply({ content:'❌ Solo Admin per il simulatore.', ephemeral:true });
-      const from = i.options.getUser('from', true);
-      const to = i.options.getUser('to', true);
-      const uniq = InventoryFindUnique(guildId, from.id, 'certificato_arrivo');
-      if (!uniq) return i.reply({ content:'❌ Il mittente non ha un certificato_arrivo.', ephemeral:true });
-
-      // trasferisci: rimuovi da FROM e aggiungi a TO con stesso payload
-      const payload = uniq.meta || {};
-      InventoryRemoveUniqueById(guildId, from.id, uniq.instance_id);
-      try {
-        InventoryAddUnique({ guild_id:guildId, user_id: to.id, item_id:'certificato_arrivo', payload_json: payload });
-      } catch (e) {
-        // ripristina a FROM in caso di errore
-        InventoryAddUnique({ guild_id:guildId, user_id: from.id, item_id:'certificato_arrivo', payload_json: payload });
-        return i.reply({ content:`❌ Destinatario inventario pieno: ${e.message}`, ephemeral:true });
-      }
-
       await addAudit(guildId, i.user.id, 'CERT_TRADE', to.id, { from: from.id, to: to.id, id_cert: payload.id_cert });
       return i.reply({ embeds:[embOk('Trade simulato').setDescription(`Certificato trasferito da <@${from.id}> a <@${to.id}>.`)], ephemeral:true });
     }

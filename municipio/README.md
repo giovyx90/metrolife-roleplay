@@ -13,7 +13,6 @@ Gestione tutorial iniziale, registrazione cittadini e rilascio documenti RP.
 - `/municipio-cert-check` – verifica se un utente è registrato
 - `/municipio-registra` – lo staff registra un cittadino
 - `/cdi-emetti` – emette il certificato di identità
-- `/trade-sim` – comando di test per scambi tra cittadino e dipendente
 
 ## Uso giocatore
 1. Completa il tutorial con `/tutorial-finish` inserendo i dati RP.

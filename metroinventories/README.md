@@ -1,6 +1,6 @@
 # MetroInventories Bot
 
-Inventario a 10 slot con stack e oggetti unici, usato da altri servizi della città.
+Inventario a 10 slot per giocatore e 50 slot per azienda, con stack e oggetti unici. Libreria condivisa `inventory-core.cjs` per gli altri bot.
 
 ## Setup tecnico
 - Dipendenze: `discord.js`, `better-sqlite3`, `dotenv`
