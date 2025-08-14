@@ -8,7 +8,7 @@ Scopo: guida operativa per lo staff della gelateria su Discord (MetroLife City).
 	•	👮‍♂️ Admin RP (fuori azienda): setup iniziale, ricezione sfusi straordinaria, economia futura, mapping SKU↔item. Usano solo comandi amministrativi (non di servizio).
 	•	🧭 L1 Direttore / L2 Vice: coordinano turni, ricette, vetrina, controlli stock, scontrini.
 	•	👨‍🍳 L3 Capo Turno (Chef) / L4 Responsabile Banco: operatività completa (coda, servizio, vetrina, magazzino pezzi, scontrini).
-	•	🍦 L5 Gelataio: può “cucinare” (servire), cioè prendere ticket, preparare e segnare pronto; può usare lo scontrino.
+	•	🍦 L5 Gelataio: può “cucinare” (servire), cioè prendere ticket e preparare; può usare lo scontrino.
 
 Nota: setup/autogive rimangono agli Admin RP. La direzione e lo staff gestiscono solo l’operatività interna.
 
@@ -20,9 +20,8 @@ Nota: setup/autogive rimangono agli Admin RP. La direzione e lo staff gestiscono
 	3.	Presa in carico: /cucina-prendi ticket:<id>
 	•	Scala automaticamente pezzi (coppette, cucchiaini…) dal magazzino dell’org (qualsiasi area).
 	•	Scala scoop dai lotti sfusi in FEFO.
-	4.	Consegna al banco: /cucina-pronto ticket:<id> o /cucina-autopronto
-	•	Il bot mette nell’inventario del gelataio l’item con lo stesso nome del menu (es. coppetta_2g).
-	5.	Trade al cliente: il gelataio scambia l’item (pagamenti veri si integreranno con la Banca).
+	4.	Consegna al banco: scambia l’item con il cliente tramite MetroTrades.
+	5.	Se serve, emetti lo scontrino con `/scontrino`.
 
 ⸻
 
