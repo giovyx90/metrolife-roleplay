@@ -273,7 +273,7 @@ function ensureMenuAsItem(menuCode){
   if (!it){
     const mi = qMenuGet.get(menuCode);
     const name = mi ? mi.name : menuCode;
-    qItemIns.run(id, name, '🍨', 'Ordine pronto (da consegnare via trade)', 16);
+    qItemIns.run(id, name, '🍨', 'Gelato farcito (da consegnare via trade)', 16);
   }
   return id;
 }
@@ -359,6 +359,9 @@ const commands = [
     .addIntegerOption(o=>o.setName('a').setDescription('slot destinazione').setRequired(true))
     .addIntegerOption(o=>o.setName('quantita').setDescription('quantità').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('magazzino-prendi').setDescription('Prendi un contenitore (cono/coppetta)')
+    .addStringOption(o=>o.setName('tipo').setDescription('cono o coppetta').setRequired(true)
+      .addChoices({ name:'cono', value:'cono' }, { name:'coppetta', value:'coppetta' })),
   new SlashCommandBuilder().setName('magazzino-a-player').setDescription('Warehouse → Player (pezzi, distribuisce su più slot)')
     .addUserOption(o=>o.setName('player').setDescription('Player').setRequired(true))
     .addIntegerOption(o=>o.setName('wh_slot').setDescription('Slot magazzino').setRequired(true))
@@ -403,10 +406,8 @@ const commands = [
   new SlashCommandBuilder().setName('cucina-coda').setDescription('Mostra coda'),
   new SlashCommandBuilder().setName('cucina-prendi').setDescription('Prendi ticket (consumo)')
     .addIntegerOption(o=>o.setName('ticket').setDescription('ID ticket').setRequired(true)),
-  new SlashCommandBuilder().setName('cucina-pronto').setDescription('Segna ticket pronto')
-    .addIntegerOption(o=>o.setName('ticket').setDescription('ID ticket').setRequired(true)),
-  new SlashCommandBuilder().setName('cucina-autopronto').setDescription('READY se tempo trascorso')
-    .addIntegerOption(o=>o.setName('ticket').setDescription('ID ticket').setRequired(true)),
+  new SlashCommandBuilder().setName('cucina-gusto').setDescription('Aggiungi un gusto al tuo cono/coppetta')
+    .addStringOption(o=>o.setName('gusto').setDescription('es. nocciola').setRequired(true)),
   new SlashCommandBuilder().setName('vetrina-livelli').setDescription('Mostra vetrina'),
   new SlashCommandBuilder().setName('vetrina-monta').setDescription('Associa lot a slot vetrina')
     .addIntegerOption(o=>o.setName('slot').setDescription('1..18').setRequired(true))
@@ -581,6 +582,18 @@ client.on('interactionCreate', async (i)=>{
         qWItemUp.run(ORG_ID, to, a.sku, a.lot_id, newB, 'pz', now());
       }); tx();
       return i.reply({ embeds:[emb('Magazzino', `Spostato ${a.sku} ×${take}: ${from} → ${to}`)], ephemeral:true });
+    }
+    if (name==='magazzino-prendi'){
+      const tipo = i.options.getString('tipo', true);
+      const sku = tipo==='cono' ? 'pack_cono' : 'pack_coppetta_media';
+      const itemId = ensureMenuAsItem(`${tipo}_vuoto`);
+      try {
+        consumePZ_FEFO({ sku, qty:1, area:'CUCINA', actor:i.user.id, ticketId:0 });
+        giveToPlayer(i.guildId, i.user.id, itemId, 1);
+      } catch(e){
+        return i.reply({ content:`❌ ${e.message}`, ephemeral:true });
+      }
+      return i.reply({ embeds:[emb('Magazzino', `${tipo} preso`)], ephemeral:true });
     }
     if (name==='magazzino-a-player'){
       const user = i.options.getUser('player', true);
@@ -789,37 +802,35 @@ client.on('interactionCreate', async (i)=>{
 
       return i.reply({ embeds:[emb('Cucina', `Ticket **#${ticketId}** preso • ETA ~ ${eta}s`)], ephemeral:true });
     }
-    if (name==='cucina-pronto'){
-      const ticketId = i.options.getInteger('ticket', true);
-      const t = qKTixGet.get(ticketId);
-      if (!t || t.status!=='IN_PROGRESS') return i.reply({ content:'Ticket non in lavorazione', ephemeral:true });
-      qKTixReady.run('READY', now(), ticketId);
-
-      // CONSEGNA al gelataio: item = menu_code (es. "coppetta_2g")
-      const outItem = ensureMenuAsItem(t.menu_code);
-      const receiver = t.assigned_to || i.user.id;
+    if (name==='cucina-gusto'){
+      const gusto = i.options.getString('gusto', true).toLowerCase();
+      const sku = gusto.startsWith('gelato_') ? gusto : `gelato_${gusto}`;
+      const conf = qKConfGet.get(ORG_ID) || { scoop_ml: DEFAULT_SCOOP_ML };
       try {
-        InventoryAddStack({ guild_id:i.guildId, user_id:receiver, item_id:outItem, amount:t.qty });
-        await i.followUp?.({ content:`✅ Consegnato a <@${receiver}>: \`${outItem}\` ×${t.qty}.`, ephemeral:true }).catch(()=>{});
+        consumeBulkFEFO({ sku, qty: conf.scoop_ml || DEFAULT_SCOOP_ML, area:'VETRINA', actor:i.user.id, ticketId:0 });
       } catch(e){
-        await i.followUp?.({ content:`⚠️ <@${receiver}> non ha spazio per \`${outItem}\` ×${t.qty}.`, ephemeral:true }).catch(()=>{});
+        return i.reply({ content:`❌ ${e.message}`, ephemeral:true });
       }
-
-      return i.reply({ embeds:[emb('Cucina', `Ticket **#${ticketId}** pronto al banco`)], ephemeral:true });
-    }
-    if (name==='cucina-autopronto'){
-      const ticketId = i.options.getInteger('ticket', true);
-      const t = qKTixGet.get(ticketId);
-      if (!t || t.status!=='IN_PROGRESS') return i.reply({ content:'Ticket non in lavorazione', ephemeral:true });
-      const rem = (t.started_at + t.eta_sec*1000) - now();
-      if (rem>0) return i.reply({ content:`Mancano ~${Math.ceil(rem/1000)}s`, ephemeral:true });
-      qKTixReady.run('READY', now(), ticketId);
-      try {
-        const outItem = ensureMenuAsItem(t.menu_code);
-        const receiver = t.assigned_to || i.user.id;
-        InventoryAddStack({ guild_id:i.guildId, user_id:receiver, item_id:outItem, amount:t.qty });
-      } catch {}
-      return i.reply({ embeds:[emb('Cucina', `Ticket **#${ticketId}** segnato pronto`)], ephemeral:true });
+      await i.deferReply({ ephemeral:true });
+      await new Promise(r=>setTimeout(r, 3000));
+      const slots = listPlayerSlots(i.guildId, i.user.id);
+      const cone = slots.find(s=>s.item_id==='cono_farcito' || s.item_id==='cono_vuoto');
+      const cup  = slots.find(s=>s.item_id==='coppetta_farcita' || s.item_id==='coppetta_vuota');
+      if (!cone && !cup) return i.editReply({ content:'Serve un cono o una coppetta in mano.' });
+      if (cone){
+        if (cone.item_id==='cono_vuoto'){
+          takeFromPlayer(i.guildId, i.user.id, 'cono_vuoto', 1);
+          giveToPlayer(i.guildId, i.user.id, ensureMenuAsItem('cono_farcito'), 1, cone.slot);
+        }
+        return i.editReply({ embeds:[emb('Cucina', `Aggiunto ${gusto} al cono`)] });
+      }
+      if (cup){
+        if (cup.item_id==='coppetta_vuota'){
+          takeFromPlayer(i.guildId, i.user.id, 'coppetta_vuota', 1);
+          giveToPlayer(i.guildId, i.user.id, ensureMenuAsItem('coppetta_farcita'), 1, cup.slot);
+        }
+        return i.editReply({ embeds:[emb('Cucina', `Aggiunto ${gusto} alla coppetta`)] });
+      }
     }
 
     // ===== VETRINA =====
@@ -973,7 +984,7 @@ function tutorialPages(){
     .setColor(0xE68AA3).setDescription([
       '• Coda: `/cucina-coda`',
       '• Prendi: `/cucina-prendi ticket:<id>` → scala packaging e scoop (FEFO).',
-      '• Pronto: `/cucina-pronto ticket:<id>` → l’ordine (es. `coppetta_2g`) va al gelataio che lo trada al cliente.'
+      '• Gusti: `/cucina-gusto nocciola` → 3s per scoop, ripeti per ogni gusto.'
     ].join('\n')).setTimestamp(new Date()));
   p.push(new EmbedBuilder().setTitle(`${APP_NAME} • 4/5 — Magazzino pezzi`)
     .setColor(0xE68AA3).setDescription([
